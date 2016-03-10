@@ -1,3 +1,6 @@
+from .web_reqrep import Response
+
+
 __all__ = (
     'HTTPException',
     'HTTPError',
@@ -17,6 +20,7 @@ __all__ = (
     'HTTPNotModified',
     'HTTPUseProxy',
     'HTTPTemporaryRedirect',
+    'HTTPPermanentRedirect',
     'HTTPClientError',
     'HTTPBadRequest',
     'HTTPUnauthorized',
@@ -36,6 +40,12 @@ __all__ = (
     'HTTPUnsupportedMediaType',
     'HTTPRequestRangeNotSatisfiable',
     'HTTPExpectationFailed',
+    'HTTPMisdirectedRequest',
+    'HTTPUpgradeRequired',
+    'HTTPPreconditionRequired',
+    'HTTPTooManyRequests',
+    'HTTPRequestHeaderFieldsTooLarge',
+    'HTTPUnavailableForLegalReasons',
     'HTTPServerError',
     'HTTPInternalServerError',
     'HTTPNotImplemented',
@@ -43,9 +53,10 @@ __all__ = (
     'HTTPServiceUnavailable',
     'HTTPGatewayTimeout',
     'HTTPVersionNotSupported',
+    'HTTPVariantAlsoNegotiates',
+    'HTTPNotExtended',
+    'HTTPNetworkAuthenticationRequired',
 )
-
-from .web_reqrep import Response
 
 
 ############################################################
@@ -58,6 +69,7 @@ class HTTPException(Response, Exception):
     # status = 200
 
     status_code = None
+    empty_body = False
 
     def __init__(self, *, headers=None, reason=None,
                  body=None, text=None, content_type=None):
@@ -65,7 +77,7 @@ class HTTPException(Response, Exception):
                           headers=headers, reason=reason,
                           body=body, text=text, content_type=content_type)
         Exception.__init__(self, self.reason)
-        if self.body is None:
+        if self.body is None and not self.empty_body:
             self.text = "{}: {}".format(self.status, self.reason)
 
 
@@ -99,10 +111,12 @@ class HTTPNonAuthoritativeInformation(HTTPSuccessful):
 
 class HTTPNoContent(HTTPSuccessful):
     status_code = 204
+    empty_body = True
 
 
 class HTTPResetContent(HTTPSuccessful):
     status_code = 205
+    empty_body = True
 
 
 class HTTPPartialContent(HTTPSuccessful):
@@ -147,6 +161,7 @@ class HTTPSeeOther(_HTTPMove):
 class HTTPNotModified(HTTPRedirection):
     # FIXME: this should include a date or etag header
     status_code = 304
+    empty_body = True
 
 
 class HTTPUseProxy(_HTTPMove):
@@ -156,6 +171,10 @@ class HTTPUseProxy(_HTTPMove):
 
 class HTTPTemporaryRedirect(_HTTPMove):
     status_code = 307
+
+
+class HTTPPermanentRedirect(_HTTPMove):
+    status_code = 308
 
 
 ############################################################
@@ -248,6 +267,38 @@ class HTTPExpectationFailed(HTTPClientError):
     status_code = 417
 
 
+class HTTPMisdirectedRequest(HTTPClientError):
+    status_code = 421
+
+
+class HTTPUpgradeRequired(HTTPClientError):
+    status_code = 426
+
+
+class HTTPPreconditionRequired(HTTPClientError):
+    status_code = 428
+
+
+class HTTPTooManyRequests(HTTPClientError):
+    status_code = 429
+
+
+class HTTPRequestHeaderFieldsTooLarge(HTTPClientError):
+    status_code = 431
+
+
+class HTTPUnavailableForLegalReasons(HTTPClientError):
+    status_code = 451
+
+    def __init__(self, link=None, *, headers=None, reason=None,
+                 body=None, text=None, content_type=None):
+        super().__init__(headers=headers, reason=reason,
+                         body=body, text=text, content_type=content_type)
+        if link:
+            self.headers['Link'] = '<%s>; rel="blocked-by"' % link
+            self.link = link
+
+
 ############################################################
 # 5xx Server Error
 ############################################################
@@ -286,3 +337,15 @@ class HTTPGatewayTimeout(HTTPServerError):
 
 class HTTPVersionNotSupported(HTTPServerError):
     status_code = 505
+
+
+class HTTPVariantAlsoNegotiates(HTTPServerError):
+    status_code = 506
+
+
+class HTTPNotExtended(HTTPServerError):
+    status_code = 510
+
+
+class HTTPNetworkAuthenticationRequired(HTTPServerError):
+    status_code = 511

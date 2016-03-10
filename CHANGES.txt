@@ -1,60 +1,106 @@
 CHANGES
 =======
 
-0.16.2 (05-27-2015)
+0.22.0 (XX-XX-XXXX)
 -------------------
 
-- Update python version required for `__del__` usage: it's actially
-   3.4.1 instead of 3.4.0
+- Fix bug in serving static directory #803
 
-- Add check for presence of loop.is_closed() method before call the
-  former #378
+- Fix command line arg parsing #797
 
+- Fix a documentation chapter about cookie usage #790
 
-0.16.1 (05-27-2015)
+- Handle empty body with gzipped encoding #758
+
+- Support 451 Unavailable For Legal Reasons http status  #697
+
+- Fix Cookie share example and few small typos in docs #817
+
+0.21.2 (02-16-2016)
 -------------------
 
-- Fix regression in static file handling #377
+- Fix a regression: support for handling ~/path in static file routes was
+  broken #782
 
-0.16.0 (05-26-2015)
+0.21.1 (02-10-2016)
 -------------------
 
-- Unset waiter future after cancellation #363
+- Make new resources classes public #767
 
-- Update request url with query parameters #372
+- Add `router.resources()` view
 
-- Support new `fingerprint` param of TCPConnector to enable verifying
-  ssl certificates via md5, sha1, or sha256 digest #366
+- Fix cmd-line parameter names in doc
 
-- Setup uploaded filename if field value is binary and transfer
-  encoding is not specified #349
+0.21.0 (02-04-2016)
+--------------------
 
-- Implement `ClientSession.close()` method
+- Introduce on_shutdown signal #722
 
-- Implement `connector.closed` readonly property
+- Implement raw input headers #726
 
-- Implement `ClientSession.closed` readonly property
+- Implement web.run_app utility function #734
 
-- Implement `ClientSession.connector` readonly property
+- Introduce on_cleanup signal
 
-- Implement `ClientSession.detach` method
+- Deprecate Application.finish() / Application.register_on_finish() in favor of
+  on_cleanup.
 
-- Add `__del__` to client-side objects: sessions, connectors,
-  connections, requests, responses.
+- Get rid of bare aiohttp.request(), aiohttp.get() and family in docs #729
 
-- Refactor connections cleanup by connector #357
+- Deprecate bare aiohttp.request(), aiohttp.get() and family #729
 
-- Add `limit` parameter to connector constructor #358
+- Refactor keep-alive support #737:
 
-- Add `request.has_body` property #364
+  - Enable keepalive for HTTP 1.0 by default
 
-- Add `response_class` parameter to `ws_connect()` #367
+  - Disable it for HTTP 0.9 (who cares about 0.9, BTW?)
+  
+  - For keepalived connections
 
-- `ProxyConnector` doesn't support keep-alive requests by default
-  starting from now #368
+      - Send `Connection: keep-alive` for HTTP 1.0 only
 
-- Add `connector.force_close` property
+      - don't send `Connection` header for HTTP 1.1
 
-- Add ws_connect to ClientSession #374
+  - For non-keepalived connections
 
-- Support optional `chunk_size` parameter in `router.add_static()`
+      - Send `Connection: close` for HTTP 1.1 only
+
+      - don't send `Connection` header for HTTP 1.0
+
+- Add version parameter to ClientSession constructor,
+  deprecate it for session.request() and family #736  
+
+- Enable access log by default #735
+
+- Deprecate app.router.register_route() (the method was not documented
+  intentionally BTW).
+
+- Deprecate app.router.named_routes() in favor of app.router.named_resources()
+
+- route.add_static accepts pathlib.Path now #743
+
+- Add command line support: `$ python -m aiohttp.web package.main` #740
+
+- FAQ section was added to docs. Enjoy and fill free to contribute new topics
+
+- Add async context manager support to ClientSession
+
+- Document ClientResponse's host, method, url properties
+
+- Use CORK/NODELAY in client API #748
+
+- ClientSession.close and Connector.close are coroutines now
+
+- Close client connection on exception in ClientResponse.release()
+
+- Allow to read multipart parts without content-length specified #750
+
+- Add support for unix domain sockets to gunicorn worker #470
+
+- Add test for default Expect handler #601
+
+- Add the first demo project
+
+- Rename `loader` keyword argument in `web.Request.json` method. #646
+
+- Add local socket binding for TCPConnector #678

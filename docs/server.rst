@@ -3,8 +3,6 @@
 Low-level HTTP Server
 =====================
 
-.. highlight:: python
-
 .. currentmodule:: aiohttp.server
 
 .. note::
@@ -18,23 +16,20 @@ Run a basic server
 Start implementing the basic server by inheriting the
 :class:`ServerHttpProtocol` object. Your class should
 implement the only method :meth:`ServerHttpProtocol.handle_request`
-which must be a coroutine to handle requests asynchronously
-
- .. code-block:: python
+which must be a coroutine to handle requests asynchronously::
 
       from urllib.parse import urlparse, parse_qsl
 
       import aiohttp
       import aiohttp.server
-      from aiohttp.multidict import MultiDict
+      from aiohttp import MultiDict
 
 
       import asyncio
 
       class HttpRequestHandler(aiohttp.server.ServerHttpProtocol):
 
-        @asyncio.coroutine
-        def handle_request(self, message, payload):
+        async def handle_request(self, message, payload):
             response = aiohttp.Response(
                 self.writer, 200, http_version=message.version
             )
@@ -42,13 +37,11 @@ which must be a coroutine to handle requests asynchronously
             response.add_header('Content-Length', '18')
             response.send_headers()
             response.write(b'<h1>It Works!</h1>')
-            yield from response.write_eof()
+            await response.write_eof()
 
 The next step is to create a loop and register your handler within a server.
 :exc:`KeyboardInterrupt` exception handling is necessary so you can stop
-your server with Ctrl+C at any time.
-
- .. code-block:: python
+your server with Ctrl+C at any time::
 
     if __name__ == '__main__':
         loop = asyncio.get_event_loop()
@@ -76,19 +69,15 @@ Handling GET params
 
 Currently aiohttp does not provide automatic parsing of incoming GET
 params.  However aiohttp does provide a nice
-:class:`MulitiDict` wrapper for already parsed params.
-
-
- .. code-block:: python
+:class:`MulitiDict` wrapper for already parsed params::
 
     from urllib.parse import urlparse, parse_qsl
 
-    from aiohttp.multidict import MultiDict
+    from aiohttp import MultiDict
 
     class HttpRequestHandler(aiohttp.server.ServerHttpProtocol):
 
-        @asyncio.coroutine
-        def handle_request(self, message, payload):
+        async def handle_request(self, message, payload):
             response = aiohttp.Response(
                 self.writer, 200, http_version=message.version
             )
@@ -101,22 +90,19 @@ Handling POST data
 
 POST data is accessed through the ``payload.read()`` generator method.
 If you have form data in the request body, you can parse it in the same way as
-GET params.
-
- .. code-block:: python
+GET params::
 
     from urllib.parse import urlparse, parse_qsl
 
-    from aiohttp.multidict import MultiDict
+    from aiohttp import MultiDict
 
     class HttpRequestHandler(aiohttp.server.ServerHttpProtocol):
 
-        @asyncio.coroutine
-        def handle_request(self, message, payload):
+        async def handle_request(self, message, payload):
             response = aiohttp.Response(
                 self.writer, 200, http_version=message.version
             )
-            data = yield from payload.read()
+            data = await payload.read()
             post_params = MultiDict(parse_qsl(data))
             print("Passed in POST", post_params)
 
@@ -124,9 +110,7 @@ SSL
 ---
 
 To use asyncio's SSL support, just pass an SSLContext object to the
-:meth:`asyncio.BaseEventLoop.create_server` method of the loop.
-
- .. code-block:: python
+:meth:`asyncio.BaseEventLoop.create_server` method of the loop::
 
     import ssl
 
@@ -145,3 +129,6 @@ Reference
     :members:
     :undoc-members:
     :show-inheritance:
+
+
+.. disqus::

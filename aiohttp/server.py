@@ -1,4 +1,4 @@
-"""simple http server."""
+"""simple HTTP server."""
 
 import asyncio
 import http.server
@@ -6,10 +6,12 @@ import traceback
 import socket
 
 from html import escape as html_escape
+from math import ceil
 
 import aiohttp
 from aiohttp import errors, streams, hdrs, helpers
-from aiohttp.log import server_logger
+from aiohttp.log import access_logger, server_logger
+from aiohttp.helpers import ensure_future
 
 __all__ = ('ServerHttpProtocol',)
 
@@ -26,9 +28,6 @@ DEFAULT_ERROR_MESSAGE = """
   </body>
 </html>"""
 
-ACCESS_LOG_FORMAT = (
-    '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s"')
-
 
 if hasattr(socket, 'SO_KEEPALIVE'):
     def tcp_keepalive(server, transport):
@@ -42,9 +41,9 @@ EMPTY_PAYLOAD = streams.EmptyStreamReader()
 
 
 class ServerHttpProtocol(aiohttp.StreamProtocol):
-    """Simple http protocol implementation.
+    """Simple HTTP protocol implementation.
 
-    ServerHttpProtocol handles incoming http request. It reads request line,
+    ServerHttpProtocol handles incoming HTTP request. It reads request line,
     request headers and request payload and calls handle_request() method.
     By default it always returns with 404 response.
 
@@ -82,7 +81,7 @@ class ServerHttpProtocol(aiohttp.StreamProtocol):
     _keep_alive_handle = None  # keep alive timer handle
     _timeout_handle = None  # slow request timer handle
 
-    _request_prefix = aiohttp.HttpPrefixParser()  # http method parser
+    _request_prefix = aiohttp.HttpPrefixParser()  # HTTP method parser
     _request_parser = aiohttp.HttpRequestParser()  # default request parser
 
     def __init__(self, *, loop=None,
@@ -90,10 +89,8 @@ class ServerHttpProtocol(aiohttp.StreamProtocol):
                  keep_alive_on=True,
                  timeout=0,
                  logger=server_logger,
-                 access_log=None,
-                 access_log_format=ACCESS_LOG_FORMAT,
-                 host="",
-                 port=0,
+                 access_log=access_logger,
+                 access_log_format=helpers.AccessLogger.LOG_FORMAT,
                  debug=False,
                  log=None,
                  **kwargs):
@@ -106,12 +103,14 @@ class ServerHttpProtocol(aiohttp.StreamProtocol):
         self._timeout = timeout  # slow request timeout
         self._loop = loop if loop is not None else asyncio.get_event_loop()
 
-        self.host = host
-        self.port = port
         self.logger = log or logger
         self.debug = debug
         self.access_log = access_log
-        self.access_log_format = access_log_format
+        if access_log:
+            self.access_logger = helpers.AccessLogger(access_log,
+                                                      access_log_format)
+        else:
+            self.access_logger = None
 
     @property
     def keep_alive_timeout(self):
@@ -138,18 +137,20 @@ class ServerHttpProtocol(aiohttp.StreamProtocol):
 
             # use slow request timeout for closing
             # connection_lost cleans timeout handler
-            self._timeout_handle = self._loop.call_later(
-                timeout, self.cancel_slow_request)
+            now = self._loop.time()
+            self._timeout_handle = self._loop.call_at(
+                ceil(now+timeout), self.cancel_slow_request)
 
     def connection_made(self, transport):
         super().connection_made(transport)
 
-        self._request_handler = asyncio.async(self.start(), loop=self._loop)
+        self._request_handler = ensure_future(self.start(), loop=self._loop)
 
         # start slow request timer
         if self._timeout:
-            self._timeout_handle = self._loop.call_later(
-                self._timeout, self.cancel_slow_request)
+            now = self._loop.time()
+            self._timeout_handle = self._loop.call_at(
+                ceil(now+self._timeout), self.cancel_slow_request)
 
         if self._keep_alive_on:
             tcp_keepalive(self, transport)
@@ -168,7 +169,7 @@ class ServerHttpProtocol(aiohttp.StreamProtocol):
             self._timeout_handle = None
 
     def data_received(self, data):
-        self.reader.feed_data(data)
+        super().data_received(data)
 
         # reading request
         if not self._reading_request:
@@ -187,17 +188,9 @@ class ServerHttpProtocol(aiohttp.StreamProtocol):
         self._keep_alive = val
 
     def log_access(self, message, environ, response, time):
-        if self.access_log and self.access_log_format:
-            try:
-                environ = environ if environ is not None else {}
-                atoms = helpers.SafeAtoms(
-                    helpers.atoms(
-                        message, environ, response, self.transport, time),
-                    getattr(message, 'headers', None),
-                    getattr(response, 'headers', None))
-                self.access_log.info(self.access_log_format % atoms)
-            except:
-                self.logger.error(traceback.format_exc())
+        if self.access_logger:
+            self.access_logger.log(message, environ, response,
+                                   self.transport, time)
 
     def log_debug(self, *args, **kw):
         if self.debug:
@@ -236,7 +229,7 @@ class ServerHttpProtocol(aiohttp.StreamProtocol):
 
             payload = None
             try:
-                # read http request method
+                # read HTTP request method
                 prefix = reader.set_parser(self._request_prefix)
                 yield from prefix.read()
 
@@ -245,8 +238,9 @@ class ServerHttpProtocol(aiohttp.StreamProtocol):
 
                 # start slow request timer
                 if self._timeout and self._timeout_handle is None:
-                    self._timeout_handle = self._loop.call_later(
-                        self._timeout, self.cancel_slow_request)
+                    now = self._loop.time()
+                    self._timeout_handle = self._loop.call_at(
+                        ceil(now+self._timeout), self.cancel_slow_request)
 
                 # read request headers
                 httpstream = reader.set_parser(self._request_parser)
@@ -271,27 +265,32 @@ class ServerHttpProtocol(aiohttp.StreamProtocol):
 
                 yield from self.handle_request(message, payload)
 
-            except (asyncio.CancelledError, errors.ClientDisconnectedError):
-                if self.debug:
-                    self.log_exception(
-                        'Ignored premature client disconnection.')
-                break
+            except asyncio.CancelledError:
+                return
+            except errors.ClientDisconnectedError:
+                self.log_debug(
+                    'Ignored premature client disconnection #1.')
+                return
             except errors.HttpProcessingError as exc:
                 if self.transport is not None:
                     yield from self.handle_error(exc.code, message,
-                                                 None, exc, exc.headers)
+                                                 None, exc, exc.headers,
+                                                 exc.message)
+            except errors.LineLimitExceededParserError as exc:
+                yield from self.handle_error(400, message, None, exc)
             except Exception as exc:
                 yield from self.handle_error(500, message, None, exc)
             finally:
                 if self.transport is None:
-                    self.log_debug('Ignored premature client disconnection.')
-                    break
+                    self.log_debug(
+                        'Ignored premature client disconnection #2.')
+                    return
 
                 if payload and not payload.is_eof():
                     self.log_debug('Uncompleted request.')
                     self._request_handler = None
                     self.transport.close()
-                    break
+                    return
                 else:
                     reader.unset_parser()
 
@@ -300,8 +299,10 @@ class ServerHttpProtocol(aiohttp.StreamProtocol):
                         self.log_debug(
                             'Start keep-alive timer for %s sec.',
                             self._keep_alive_period)
-                        self._keep_alive_handle = self._loop.call_later(
-                            self._keep_alive_period, self.transport.close)
+                        now = self._loop.time()
+                        self._keep_alive_handle = self._loop.call_at(
+                            ceil(now+self._keep_alive_period),
+                            self.transport.close)
                     elif self._keep_alive and self._keep_alive_on:
                         # do nothing, rely on kernel or upstream server
                         pass
@@ -309,16 +310,16 @@ class ServerHttpProtocol(aiohttp.StreamProtocol):
                         self.log_debug('Close client connection.')
                         self._request_handler = None
                         self.transport.close()
-                        break
+                        return
                 else:
                     # connection is closed
-                    break
+                    return
 
-    def handle_error(self, status=500,
-                     message=None, payload=None, exc=None, headers=None):
+    def handle_error(self, status=500, message=None,
+                     payload=None, exc=None, headers=None, reason=None):
         """Handle errors.
 
-        Returns http response with specific status code. Logs additional
+        Returns HTTP response with specific status code. Logs additional
         information. It always closes current connection."""
         now = self._loop.time()
         try:
@@ -330,7 +331,10 @@ class ServerHttpProtocol(aiohttp.StreamProtocol):
                 self.log_exception("Error handling request")
 
             try:
-                reason, msg = RESPONSES[status]
+                if reason is None or reason == '':
+                    reason, msg = RESPONSES[status]
+                else:
+                    msg = reason
             except KeyError:
                 status = 500
                 reason, msg = '???', ''
@@ -347,14 +351,16 @@ class ServerHttpProtocol(aiohttp.StreamProtocol):
                 status=status, reason=reason, message=msg).encode('utf-8')
 
             response = aiohttp.Response(self.writer, status, close=True)
-            response.add_headers(
-                ('CONTENT-TYPE', 'text/html; charset=utf-8'),
-                ('CONTENT-LENGTH', str(len(html))))
+            response.add_header(hdrs.CONTENT_TYPE, 'text/html; charset=utf-8')
+            response.add_header(hdrs.CONTENT_LENGTH, str(len(html)))
             if headers is not None:
-                response.add_headers(*headers)
+                for name, value in headers:
+                    response.add_header(name, value)
             response.send_headers()
 
             response.write(html)
+            # disable CORK, enable NODELAY if needed
+            self.writer.set_tcp_nodelay(True)
             drain = response.write_eof()
 
             self.log_access(message, None, response, self._loop.time() - now)
@@ -363,7 +369,7 @@ class ServerHttpProtocol(aiohttp.StreamProtocol):
             self.keep_alive(False)
 
     def handle_request(self, message, payload):
-        """Handle a single http request.
+        """Handle a single HTTP request.
 
         Subclass should override this method. By default it always
         returns 404 response.
@@ -379,9 +385,8 @@ class ServerHttpProtocol(aiohttp.StreamProtocol):
 
         body = b'Page Not Found!'
 
-        response.add_headers(
-            ('CONTENT-TYPE', 'text/plain'),
-            ('CONTENT-LENGTH', str(len(body))))
+        response.add_header(hdrs.CONTENT_TYPE, 'text/plain')
+        response.add_header(hdrs.CONTENT_LENGTH, str(len(body)))
         response.send_headers()
         response.write(body)
         drain = response.write_eof()

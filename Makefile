@@ -1,33 +1,38 @@
 # Some simple testing tasks (sorry, UNIX only).
 
-FLAGS=
+.install-deps: requirements-dev.txt
+	pip install -U -r requirements-dev.txt
+	touch .install-deps
 
-
-flake:
+flake: .install-deps
 #	python setup.py check -rms
-	flake8 aiohttp tests examples
+	flake8 aiohttp
+	if python -c "import sys; sys.exit(sys.version_info < (3,5))"; then \
+	    flake8 examples tests; \
+	fi
 
-develop:
-	python setup.py develop
 
-test: flake develop
-	nosetests -s $(FLAGS) ./tests/
+.develop: .install-deps $(shell find aiohttp -type f)
+	pip install -e .
+	touch .develop
 
-vtest: flake develop
-	nosetests -s -v $(FLAGS) ./tests/
+test: flake .develop
+	py.test -q ./tests/
+
+vtest: flake .develop
+	py.test -s -v ./tests/
 
 cov cover coverage:
 	tox
 
-cov-dev: flake develop
-	@coverage erase
-	@coverage run -m nose -s $(FLAGS) tests
-	@mv .coverage .coverage.accel
-	@AIOHTTP_NO_EXTENSIONS=1 coverage run -m nose -s $(FLAGS) tests
-	@mv .coverage .coverage.pure
-	@coverage combine
-	@coverage report
-	@coverage html
+cov-dev: .develop
+	py.test --cov=aiohttp --cov-report=term --cov-report=html tests
+	@echo "open file://`pwd`/coverage/index.html"
+
+cov-dev-full: .develop
+	AIOHTTP_NO_EXTENSIONS=1 py.test --cov=aiohttp --cov-append tests
+	PYTHONASYNCIODEBUG=1 py.test --cov=aiohttp --cov-append tests
+	py.test --cov=aiohttp --cov-report=term --cov-report=html tests
 	@echo "open file://`pwd`/coverage/index.html"
 
 clean:
@@ -49,9 +54,21 @@ clean:
 	rm -f aiohttp/_multidict.c
 	rm -f aiohttp/_multidict.*.so
 	rm -f aiohttp/_multidict.*.pyd
+	rm -f aiohttp/_websocket.html
+	rm -f aiohttp/_websocket.c
+	rm -f aiohttp/_websocket.*.so
+	rm -f aiohttp/_websocket.*.pyd
+	rm -rf .tox
 
 doc:
 	make -C docs html
 	@echo "open file://`pwd`/docs/_build/html/index.html"
+
+doc-spelling:
+	make -C docs spelling
+
+install:
+	pip install -U pip
+	pip install -Ur requirements-dev.txt
 
 .PHONY: all build venv flake test vtest testloop cov clean doc

@@ -1,21 +1,16 @@
 import argparse
 import asyncio
 import collections
+import cProfile
 import gc
 import random
 import socket
+from statistics import stdev, mean, median
 import string
 import sys
 from multiprocessing import Process, set_start_method, Barrier
 
-from scipy.stats import norm, tmean, tvar, tstd
-from numpy import array, median
-from numpy.ma import masked_equal
-
 import aiohttp
-
-
-PROFILE = False
 
 
 def find_port():
@@ -26,7 +21,10 @@ def find_port():
     return host, port
 
 
-def run_aiohttp(host, port, barrier):
+profiler = cProfile.Profile()
+
+
+def run_aiohttp(host, port, barrier, profile):
 
     from aiohttp import web
 
@@ -60,11 +58,8 @@ def run_aiohttp(host, port, barrier):
     srv, app, handler = loop.run_until_complete(init(loop))
     barrier.wait()
 
-    if PROFILE:
-        import cProfile
-
-        prof = cProfile.Profile()
-        prof.enable()
+    if profile:
+        profiler.enable()
 
     loop.run_forever()
     srv.close()
@@ -72,12 +67,11 @@ def run_aiohttp(host, port, barrier):
     loop.run_until_complete(srv.wait_closed())
     loop.close()
 
-    if PROFILE:
-        prof.disable()
-        prof.dump_stats('out.prof')
+    if profile:
+        profiler.disable()
 
 
-def run_tornado(host, port, barrier):
+def run_tornado(host, port, barrier, profile):
 
     import tornado.ioloop
     import tornado.web
@@ -113,7 +107,7 @@ def run_tornado(host, port, barrier):
     tornado.ioloop.IOLoop.instance().start()
 
 
-def run_twisted(host, port, barrier):
+def run_twisted(host, port, barrier, profile):
 
     if 'bsd' in sys.platform or sys.platform.startswith('darwin'):
         from twisted.internet import kqreactor
@@ -175,28 +169,30 @@ def run_twisted(host, port, barrier):
 
 
 @asyncio.coroutine
-def attack(count, concurrency, connector, loop, url):
-    request = aiohttp.request
+def attack(count, concurrency, client, loop, url):
 
-    in_queue = collections.deque()
     out_times = collections.deque()
     processed_count = 0
 
+    def gen():
+        for i in range(count):
+            rnd = ''.join(random.sample(string.ascii_letters, 16))
+            yield rnd
+
     @asyncio.coroutine
-    def do_bomb():
+    def do_bomb(in_iter):
         nonlocal processed_count
-        while in_queue:
-            rnd = in_queue.popleft()
+        for rnd in in_iter:
             real_url = url + '/test/' + rnd
             try:
                 t1 = loop.time()
-                resp = yield from request('GET', real_url,
-                                          connector=connector, loop=loop)
+                resp = yield from client.get(real_url)
                 assert resp.status == 200, resp.status
                 if 'text/plain; charset=utf-8' != resp.headers['Content-Type']:
                     raise AssertionError('Invalid Content-Type: %r' %
                                          resp.headers)
                 body = yield from resp.text()
+                yield from resp.release()
                 assert body == ('Hello, ' + rnd), rnd
                 t2 = loop.time()
                 out_times.append(t2 - t1)
@@ -204,13 +200,10 @@ def attack(count, concurrency, connector, loop, url):
             except Exception:
                 continue
 
-    for i in range(count):
-        rnd = ''.join(random.sample(string.ascii_letters, 16))
-        in_queue.append(rnd)
-
+    in_iter = gen()
     bombers = []
     for i in range(concurrency):
-        bomber = asyncio.async(do_bomb())
+        bomber = asyncio.async(do_bomb(in_iter))
         bombers.append(bomber)
 
     t1 = loop.time()
@@ -221,39 +214,39 @@ def attack(count, concurrency, connector, loop, url):
 
 
 @asyncio.coroutine
-def run(test, count, concurrency, *, loop, verbose):
+def run(test, count, concurrency, *, loop, verbose, profile):
     if verbose:
         print("Prepare")
     else:
         print('.', end='', flush=True)
     host, port = find_port()
     barrier = Barrier(2)
-    server = Process(target=test, args=(host, port, barrier))
+    server = Process(target=test, args=(host, port, barrier, profile))
     server.start()
     barrier.wait()
 
     url = 'http://{}:{}'.format(host, port)
 
     connector = aiohttp.TCPConnector(loop=loop)
+    with aiohttp.ClientSession(connector=connector) as client:
 
-    for i in range(10):
-        # make server hot
-        resp = yield from aiohttp.request('GET', url+'/prepare',
-                                          connector=connector, loop=loop)
+        for i in range(10):
+            # make server hot
+            resp = yield from client.get(url+'/prepare')
+            assert resp.status == 200, resp.status
+            yield from resp.release()
+
+        if verbose:
+            test_name = test.__name__
+            print("Attack", test_name)
+        rps, data = yield from attack(count, concurrency, client, loop, url)
+        if verbose:
+            print("Done")
+
+        resp = yield from client.get(url+'/stop')
         assert resp.status == 200, resp.status
-        resp.release()
+        yield from resp.release()
 
-    if verbose:
-        test_name = test.__name__
-        print("Attack", test_name)
-    rps, data = yield from attack(count, concurrency, connector, loop, url)
-    if verbose:
-        print("Done")
-
-    resp = yield from aiohttp.request('GET', url+'/stop',
-                                      connector=connector, loop=loop)
-    assert resp.status == 200, resp.status
-    resp.release()
     server.join()
     return rps, data
 
@@ -278,20 +271,24 @@ def main(argv):
         test_name = test.__name__
 
         rps, times = loop.run_until_complete(run(test, count, concurrency,
-                                                 loop=loop, verbose=verbose))
+                                                 loop=loop, verbose=verbose,
+                                                 profile=args.profile))
         all_times[test_name].extend(times)
         all_rps[test_name].append(rps)
+
+    if args.profile:
+        profiler.dump_stats('out.prof')
 
     print()
 
     for test_name in sorted(all_rps):
-        rps = array(all_rps[test_name])
-        times = array(all_times[test_name]) * 1000
+        rps = all_rps[test_name]
+        times = [t * 1000 for t in all_times[test_name]]
 
-        rps_mean = tmean(rps)
-        times_mean = tmean(times)
-        times_stdev = tstd(times)
-        times_median = float(median(times))
+        rps_mean = mean(rps)
+        times_mean = mean(times)
+        times_stdev = stdev(times)
+        times_median = median(times)
         print('Results for', test_name)
         print('RPS: {:d},\tmean: {:.3f} ms,'
               '\tstandard deviation {:.3f} ms\tmedian {:.3f} ms'
@@ -322,6 +319,10 @@ ARGS.add_argument(
 ARGS.add_argument(
     '-v', '--verbose', action="count", default=0,
     help='verbosity level (default: `%(default)s`)')
+ARGS.add_argument(
+    '--profile', action="store_true", default=False,
+    help='perform aiohttp test profiling, store result as out.prof '
+    '(default: `%(default)s`)')
 
 
 if __name__ == '__main__':

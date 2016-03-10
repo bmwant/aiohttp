@@ -7,6 +7,8 @@ import signal
 import sys
 import gunicorn.workers.base as base
 
+from aiohttp.helpers import ensure_future
+
 __all__ = ('GunicornWebWorker',)
 
 
@@ -28,7 +30,7 @@ class GunicornWebWorker(base.Worker):
         super().init_process()
 
     def run(self):
-        self._runner = asyncio.async(self._run(), loop=self.loop)
+        self._runner = ensure_future(self._run(), loop=self.loop)
 
         try:
             self.loop.run_until_complete(self._runner)
@@ -37,15 +39,13 @@ class GunicornWebWorker(base.Worker):
 
         sys.exit(self.exit_code)
 
-    def make_handler(self, app, host, port):
+    def make_handler(self, app):
         if hasattr(self.cfg, 'debug'):
             is_debug = self.cfg.debug
         else:
             is_debug = self.log.loglevel == logging.DEBUG
 
         return app.make_handler(
-            host=host,
-            port=port,
             logger=self.log,
             debug=is_debug,
             timeout=self.cfg.timeout,
@@ -65,6 +65,9 @@ class GunicornWebWorker(base.Worker):
                               self.pid, len(handler.connections))
                 server.close()
 
+            # send on_shutdown event
+            yield from self.wsgi.shutdown()
+
             # stop alive connections
             tasks = [
                 handler.finish_connections(
@@ -78,7 +81,7 @@ class GunicornWebWorker(base.Worker):
     @asyncio.coroutine
     def _run(self):
         for sock in self.sockets:
-            handler = self.make_handler(self.wsgi, *sock.cfg_addr)
+            handler = self.make_handler(self.wsgi)
             srv = yield from self.loop.create_server(handler, sock=sock.sock)
             self.servers[srv] = handler
 
@@ -93,6 +96,14 @@ class GunicornWebWorker(base.Worker):
                     self.log.info("Parent changed, shutting down: %s", self)
                 else:
                     yield from asyncio.sleep(1.0, loop=self.loop)
+
+                if self.cfg.max_requests and self.servers:
+                    connections = 0
+                    for _, handler in self.servers.items():
+                        connections += handler.num_connections
+                    if connections > self.cfg.max_requests:
+                        self.alive = False
+                        self.log.info("Max requests, shutting down: %s", self)
         except (Exception, BaseException, GeneratorExit, KeyboardInterrupt):
             pass
 

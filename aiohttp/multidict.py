@@ -104,7 +104,7 @@ class _Base:
 
     def __repr__(self):
         body = ', '.join("'{}': {!r}".format(k, v) for k, v in self.items())
-        return '<{} {{{}}}>'.format(self.__class__.__name__, body)
+        return '<{}({})>'.format(self.__class__.__name__, body)
 
 
 class _CIBase(_Base):
@@ -316,6 +316,13 @@ class _ItemsView(_ViewBase, abc.ItemsView):
     def __iter__(self):
         yield from self._items
 
+    def __repr__(self):
+        lst = []
+        for item in self._items:
+            lst.append("{!r}: {!r}".format(item[0], item[1]))
+        body = ', '.join(lst)
+        return '{}({})'.format(self.__class__.__name__, body)
+
 
 class _ValuesView(_ViewBase, abc.ValuesView):
 
@@ -329,6 +336,13 @@ class _ValuesView(_ViewBase, abc.ValuesView):
         for item in self._items:
             yield item[1]
 
+    def __repr__(self):
+        lst = []
+        for item in self._items:
+            lst.append("{!r}".format(item[1]))
+        body = ', '.join(lst)
+        return '{}({})'.format(self.__class__.__name__, body)
+
 
 class _KeysView(_ViewBase, abc.KeysView):
 
@@ -341,6 +355,13 @@ class _KeysView(_ViewBase, abc.KeysView):
     def __iter__(self):
         for item in self._items:
             yield item[0]
+
+    def __repr__(self):
+        lst = []
+        for item in self._items:
+            lst.append("{!r}".format(item[0]))
+        body = ', '.join(lst)
+        return '{}({})'.format(self.__class__.__name__, body)
 
 
 if bool(os.environ.get('AIOHTTP_NO_EXTENSIONS')):

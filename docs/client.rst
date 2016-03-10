@@ -3,28 +3,9 @@
 HTTP Client
 ===========
 
-.. highlight:: python
+.. module:: aiohttp
 
-.. module:: aiohttp.client
-
-Example
--------
-
-Because most of the *aiohttp* methods are generators, they will not work
-in the interactive python interpreter like regular functions
-would. For convenience, we show our examples as if they were run in
-the interactive interpreter, but please remember that actually running
-them requires that you wrap them in functions and run them with an
-:ref:`asyncio loop<asyncio-event-loop>`. For example::
-
-  >>> def run():
-  ...   r = yield from aiohttp.request('get', 'http://python.org')
-  ...   raw = yield from r.text()
-  ...   print(raw)
-
-  >>> if __name__ == '__main__':
-  ...    asyncio.get_event_loop().run_until_complete(run())
-
+.. currentmodule:: aiohttp
 
 
 Make a Request
@@ -32,35 +13,32 @@ Make a Request
 
 Begin by importing the aiohttp module::
 
-    >>> import aiohttp
+    import aiohttp
 
-Now, let's try to get a webpage. For example let's get GitHub's public
-timeline ::
+Now, let's try to get a web-page. For example let's get GitHub's public
+time-line ::
 
-    >>> r = yield from aiohttp.request(
-    ...     'get', 'https://github.com/timeline.json')
+    async with aiohttp.ClientSession() as session:
+        async with session.get('https://api.github.com/events') as resp:
+            print(resp.status)
+            print(await resp.text())
 
-Now, we have a :class:`ClientResponse` object called ``r``. We can get all the
-information we need from this object.
-The first parameter is the http method, in that case it is ``get``
-and the second is an http url.
-In order to make an HTTP POST request::
+Now, we have a :class:`ClientSession` called ``session`` and
+a :class:`ClientResponse` object called ``resp``. We can get all the
+information we need from the response.  The mandatory parameter of
+:meth:`ClientSession.get` coroutine is an HTTP url.
 
-    >>> r = yield from aiohttp.request(
-    ...     'post', 'http://httpbin.org/post')
+In order to make an HTTP POST request use :meth:`ClientSession.post` coroutine::
 
-The first parameter could be any valid http method. For example::
+    session.post('http://httpbin.org/post', data=b'data')
 
-    >>> r = yield from aiohttp.request(
-    ...     'put', 'http://httpbin.org/put')
-    >>> r = yield from aiohttp.request(
-    ...     'delete', 'http://httpbin.org/delete')
-    >>> r = yield from aiohttp.request(
-    ...     'head', 'http://httpbin.org/get')
-    >>> r = yield from aiohttp.request(
-    ...     'options', 'http://httpbin.org/get')
-    >>> r = yield from aiohttp.request(
-    ...     'patch', 'http://httpbin.org/patch')
+Other HTTP methods are available as well::
+
+    session.put('http://httpbin.org/put', data=b'data')
+    session.delete('http://httpbin.org/delete')
+    session.head('http://httpbin.org/get')
+    session.options('http://httpbin.org/get')
+    session.patch('http://httpbin.org/patch', data=b'data')
 
 
 Passing Parameters In URLs
@@ -69,48 +47,54 @@ Passing Parameters In URLs
 You often want to send some sort of data in the URL's query string. If
 you were constructing the URL by hand, this data would be given as key/value
 pairs in the URL after a question mark, e.g. ``httpbin.org/get?key=val``.
-Requests allows you to provide these arguments as a dictionary, using the
+Requests allows you to provide these arguments as a :class:`dict`, using the
 ``params`` keyword argument. As an example, if you wanted to pass
 ``key1=value1`` and ``key2=value2`` to ``httpbin.org/get``, you would use the
 following code::
 
-    >>> payload = {'key1': 'value1', 'key2': 'value2'}
-    >>> r = yield from aiohttp.request('get',
-    ...                                'http://httpbin.org/get',
-    ...                                params=payload)
+    params = {'key1': 'value1', 'key2': 'value2'}
+    async with session.get('http://httpbin.org/get',
+                           params=params) as resp:
+        assert resp.url == 'http://httpbin.org/get?key2=value2&key1=value1'
 
-You can see that the URL has been correctly encoded by printing the URL::
+You can see that the URL has been correctly encoded by printing the URL.
 
-    >>> print(r.url)
-    http://httpbin.org/get?key2=value2&key1=value1
+For sending data with multiple values for the same key
+:class:`MultiDict` may be used as well.
+
 
 It is also possible to pass a list of 2 item tuples as parameters, in
-that case you can specifiy multiple values for each key::
+that case you can specify multiple values for each key::
 
-    >>> payload = [('key', 'value1'), ('key': 'value2')]
-    >>> r = yield from aiohttp.request('get',
-    ...                                'http://httpbin.org/get',
-    ...                                params=payload)
-    >>> print(r.url)
-    http://httpbin.org/get?key=value2&key=value1
+    params = [('key', 'value1'), ('key', 'value2')]
+    async with session.get('http://httpbin.org/get',
+                           params=params) as r:
+        assert r.url == 'http://httpbin.org/get?key=value2&key=value1'
 
+You can also pass :class:`str` content as param, but beware - content
+is not encoded by library. Note that ``+`` is not encoded::
+
+    async with session.get('http://httpbin.org/get',
+                           params='key=value+1') as r:
+            assert r.url = 'http://httpbin.org/get?key=value+1'
 
 Response Content
 ----------------
 
-We can read the content of the server's response. Consider the GitHub timeline
+We can read the content of the server's response. Consider the GitHub time-line
 again::
 
-    >>> import aiohttp
-    >>> r = yield from aiohttp.request(
-    ...     'get', 'https://github.com/timeline.json')
-    >>> yield from r.text()
-    '[{"repository":{"open_issues":0,"url":"https://github.com/...
+    async with session.get('https://api.github.com/events') as resp:
+        print(await resp.text())
 
-aiohttp will automatically decode the content from the server. You can
-specify custom encoding for the ``text()`` method::
+will printout something like::
 
-    >>> yield from r.text(encoding='windows-1251')
+    '[{"created_at":"2015-06-12T14:06:22Z","public":true,"actor":{...
+
+``aiohttp`` will automatically decode the content from the server. You can
+specify custom encoding for the :meth:`~ClientResponse.text` method::
+
+    await resp.text(encoding='windows-1251')
 
 
 Binary Response Content
@@ -118,8 +102,11 @@ Binary Response Content
 
 You can also access the response body as bytes, for non-text requests::
 
-    >>> yield from r.read()
-    b'[{"repository":{"open_issues":0,"url":"https://github.com/...
+    print(await resp.read())
+
+::
+
+    b'[{"created_at":"2015-06-12T14:06:22Z","public":true,"actor":{...
 
 The ``gzip`` and ``deflate`` transfer-encodings are automatically
 decoded for you.
@@ -128,50 +115,66 @@ decoded for you.
 JSON Response Content
 ---------------------
 
-There's also a builtin JSON decoder, in case you're dealing with JSON data::
+There's also a built-in JSON decoder, in case you're dealing with JSON data::
 
-    >>> import aiohttp
-    >>> r = yield from aiohttp.request(
-    ...     'get', 'https://github.com/timeline.json')
-    >>> yield from r.json()
-    [{'repository': {'open_issues': 0, 'url': 'https://github.com/...
+    async with session.get('https://api.github.com/events') as resp:
+        print(await resp.json())
 
-In case that JSON decoding fails, ``r.json()`` will raise an exception. It
-is possible to specify custom encoding and decoder functions for the
-``json()`` call.
+In case that JSON decoding fails, :meth:`~ClientResponse.json` will
+raise an exception. It is possible to specify custom encoding and
+decoder functions for the :meth:`~ClientResponse.json` call.
 
 
 Streaming Response Content
 --------------------------
 
-While methods ``read()``, ``json()`` and ``text()`` are very
-convenient you should use them carefully. All this methods loads the
+While methods :meth:`~ClientResponse.read`,
+:meth:`~ClientResponse.json` and :meth:`~ClientResponse.text` are very
+convenient you should use them carefully. All these methods load the
 whole response in memory.  For example if you want to download several
-gigabyte sized files, this methods will load all the data in
-memory. Instead you can use the ``ClientResponse.content``
-attribute. It is an instance of the ``aiohttp.StreamReader``
+gigabyte sized files, these methods will load all the data in
+memory. Instead you can use the :attr:`~ClientResponse.content`
+attribute. It is an instance of the :class:`aiohttp.StreamReader`
 class. The ``gzip`` and ``deflate`` transfer-encodings are
 automatically decoded for you::
 
-    >>> r = yield from aiohttp.request(
-    ...     'get', 'https://github.com/timeline.json')
-    >>> r.content
-    <aiohttp.streams.StreamReader object at 0x...>
-    >>> yield from r.content.read(10)
-    '\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03'
+    async with session.get('https://api.github.com/events') as resp:
+        await resp.content.read(10)
 
 In general, however, you should use a pattern like this to save what is being
 streamed to a file::
 
-    >>> with open(filename, 'wb') as fd:
-    ...     while True:
-    ...         chunk = yield from r.content.read(chunk_size)
-    ...         if not chunk:
-    ...             break
-    ...         fd.write(chunk)
+    with open(filename, 'wb') as fd:
+        while True:
+            chunk = await resp.content.read(chunk_size)
+            if not chunk:
+                break
+            fd.write(chunk)
 
-It is not possible to use ``read()``, ``json()`` and ``text()`` after
-reading the file with ``chunk_size``.
+It is not possible to use :meth:`~ClientResponse.read`,
+:meth:`~ClientResponse.json` and :meth:`~ClientResponse.text` after
+explicit reading from :attr:`~ClientResponse.content`.
+
+
+Releasing Response
+--------------------------
+
+Don't forget to release response after use. This will ensure explicit
+behavior and proper connection pooling.
+
+The easiest way to correctly response releasing is ``async with`` statement::
+
+    async with session.get(url) as resp:
+        pass
+
+But explicit :meth:`~ClientResponse.release` call also may be used::
+
+    await resp.release()
+
+But it's not necessary if you use :meth:`~ClientResponse.read`,
+:meth:`~ClientResponse.json` and :meth:`~ClientResponse.text` methods.
+They do release connection internally but better don't rely on that
+behavior.
 
 
 Custom Headers
@@ -180,31 +183,35 @@ Custom Headers
 If you need to add HTTP headers to a request, pass them in a
 :class:`dict` to the *headers* parameter.
 
-For example, if you want to specify the content-type for the previous example::
+For example, if you want to specify the content-type for the previous
+example::
 
-    >>> import json
-    >>> url = 'https://api.github.com/some/endpoint'
-    >>> payload = {'some': 'data'}
-    >>> headers = {'content-type': 'application/json'}
+    import json
+    url = 'https://api.github.com/some/endpoint'
+    payload = {'some': 'data'}
+    headers = {'content-type': 'application/json'}
 
-    >>> r = yield from aiohttp.request('post',
-    ...                                url,
-    ...                                data=json.dumps(payload),
-    ...                                headers=headers)
+    await session.post(url,
+                       data=json.dumps(payload),
+                       headers=headers)
 
 
 Custom Cookies
 --------------
 
 To send your own cookies to the server, you can use the *cookies*
-parameter::
+parameter of :class:`ClientSession` constructor::
 
-    >>> url = 'http://httpbin.org/cookies'
-    >>> cookies = dict(cookies_are='working')
+    url = 'http://httpbin.org/cookies'
+    async with ClientSession({'cookies_are': 'working'}) as session:
+        async with session.get(url) as resp:
+            assert await resp.json() == {"cookies":
+                                             {"cookies_are": "working"}}
 
-    >>> r = yield from aiohttp.request('get', url, cookies=cookies)
-    >>> yield from r.text()
-    '{"cookies": {"cookies_are": "working"}}'
+.. note::
+   ``httpbin.org/cookies`` endpoint returns request cookies
+   in JSON-encoded body.
+   To access session cookies see :attr:`ClientSession.cookies`.
 
 
 More complicated POST requests
@@ -214,11 +221,13 @@ Typically, you want to send some form-encoded data — much like an HTML form.
 To do this, simply pass a dictionary to the *data* argument. Your
 dictionary of data will automatically be form-encoded when the request is made::
 
-    >>> payload = {'key1': 'value1', 'key2': 'value2'}
-    >>> r = yield from aiohttp.request('post',
-    ...                                'http://httpbin.org/post',
-    ...                                data=payload)
-    >>> yield from r.text()
+    payload = {'key1': 'value1', 'key2': 'value2'}
+    async with session.post('http://httpbin.org/post',
+                            data=payload) as resp:
+        print(await resp.text())
+
+::
+
     {
       ...
       "form": {
@@ -234,12 +243,12 @@ posted directly.
 
 For example, the GitHub API v3 accepts JSON-Encoded POST/PATCH data::
 
-    >>> import json
-    >>> url = 'https://api.github.com/some/endpoint'
-    >>> payload = {'some': 'data'}
+    import json
+    url = 'https://api.github.com/some/endpoint'
+    payload = {'some': 'data'}
 
-    >>> r = yield from aiohttp.request(
-    ...     'post', url, data=json.dumps(payload))
+    async with session.post(url, data=json.dumps(payload)) as resp:
+        ...
 
 
 POST a Multipart-Encoded File
@@ -247,21 +256,21 @@ POST a Multipart-Encoded File
 
 To upload Multipart-encoded files::
 
-    >>> url = 'http://httpbin.org/post'
-    >>> files = {'file': open('report.xls', 'rb')}
+    url = 'http://httpbin.org/post'
+    files = {'file': open('report.xls', 'rb')}
 
-    >>> yield from aiohttp.request('post', url, data=files)
+    await session.post(url, data=files)
 
 You can set the filename, content_type explicitly::
 
-    >>> url = 'http://httpbin.org/post'
-    >>> data = FormData()
-    >>> data.add_field('file',
-    ...                open('report.xls', 'rb'),
-    ...                filename='report.xls',
-    ...                content_type='application/vnd.ms-excel')
+    url = 'http://httpbin.org/post'
+    data = FormData()
+    data.add_field('file',
+                   open('report.xls', 'rb'),
+                   filename='report.xls',
+                   content_type='application/vnd.ms-excel')
 
-    >>> yield from aiohttp.request('post', url, data=data)
+    await session.post(url, data=data)
 
 If you pass a file object as data parameter, aiohttp will stream it to
 the server automatically. Check :class:`~aiohttp.streams.StreamReader`
@@ -278,19 +287,20 @@ send large files without reading them into memory.
 
 As a simple case, simply provide a file-like object for your body::
 
-    >>> with open('massive-body', 'rb') as f:
-    ...   yield from aiohttp.request(
-    ...       'post', 'http://some.url/streamed', data=f)
+    with open('massive-body', 'rb') as f:
+       await session.post('http://some.url/streamed', data=f)
 
 
 Or you can provide an :ref:`coroutine<coroutine>` that yields bytes objects::
 
-   >>> @asyncio.coroutine
-   ... def my_coroutine():
-   ...    chunk = yield from read_some_data_from_somewhere()
-   ...    if not chunk:
-   ...       return
-   ...    yield chunk
+   @asyncio.coroutine
+   def my_coroutine():
+      chunk = yield from read_some_data_from_somewhere()
+      if not chunk:
+         return
+      yield chunk
+
+.. warning:: ``yield`` expression is forbidden inside ``async def``.
 
 .. note::
 
@@ -300,36 +310,52 @@ Or you can provide an :ref:`coroutine<coroutine>` that yields bytes objects::
 
 Also it is possible to use a :class:`~aiohttp.streams.StreamReader`
 object. Lets say we want to upload a file from another request and
-calculate the file sha1 hash::
+calculate the file SHA1 hash::
 
-   >>> def feed_stream(resp, stream):
-   ...    h = hashlib.sha1()
-   ...
-   ...    with True:
-   ...       chunk = yield from resp.content.readany()
-   ...       if not chunk:
-   ...          break
-   ...       h.update(chunk)
-   ...       s.feed_data(chunk)
-   ...
-   ...    return h.hexdigest()
+   async def feed_stream(resp, stream):
+       h = hashlib.sha256()
 
-   >>> resp = aiohttp.request('get', 'http://httpbin.org/post')
-   >>> stream = StreamReader()
-   >>> asyncio.async(aiohttp.request(
-   ...     'post', 'http://httpbin.org/post', data=stream))
+       while True:
+           chunk = await resp.content.readany()
+           if not chunk:
+               break
+           h.update(chunk)
+           s.feed_data(chunk)
 
-   >>> file_hash = yield from feed_stream(resp, stream)
+       return h.hexdigest()
+
+   resp = session.get('http://httpbin.org/post')
+   stream = StreamReader()
+   loop.create_task(session.post('http://httpbin.org/post', data=stream))
+
+   file_hash = await feed_stream(resp, stream)
 
 
 Because the response content attribute is a
 :class:`~aiohttp.streams.StreamReader`, you can chain get and post
-requests together::
+requests together (aka HTTP pipelining)::
 
-   >>> r = yield from aiohttp.request('get', 'http://python.org')
-   >>> yield from aiohttp.request('post',
-   ...                            'http://httpbin.org/post',
-   ...                            data=r.content)
+   r = await session.get, 'http://python.org')
+   await session.post('http://httpbin.org/post',
+                      data=r.content)
+
+
+Uploading pre-compressed data
+-----------------------------
+
+To upload data that is already compressed before passing it to aiohttp, call
+the request function with ``compress=False`` and set the used compression
+algorithm name (usually deflate or zlib) as the value of the
+``Content-Encoding`` header::
+
+    async def my_coroutine(session, headers, my_data):
+        data = zlib.compress(my_data)
+        headers = {'Content-Encoding': 'deflate'}
+        async with session.post('http://httpbin.org/post',
+                                data=data,
+                                headers=headers,
+                                compress=False):
+            pass
 
 
 .. _aiohttp-client-session:
@@ -337,41 +363,43 @@ requests together::
 Keep-Alive, connection pooling and cookie sharing
 -------------------------------------------------
 
-To share cookies between multiple requests you can create an
-:class:`~aiohttp.client.ClientSession` object::
+:class:`~aiohttp.ClientSession` may be used for sharing cookies
+between multiple requests::
 
-    >>> session = aiohttp.ClientSession()
-    >>> yield from session.get(
-    ...     'http://httpbin.org/cookies/set/my_cookie/my_value')
-    >>> r = yield from session.get('http://httpbin.org/cookies')
-    >>> json = yield from r.json()
-    >>> json['cookies']['my_cookie']
-    'my_value'
+    async with aiohttp.ClientSession() as session:
+        await session.get(
+            'http://httpbin.org/cookies/set?my_cookie=my_value')
+        assert session.cookies['my_cookie'].value == 'my_value'
+        async with session.get('http://httpbin.org/cookies') as r:
+            json_body = await r.json()
+            assert json_body['cookies']['my_cookie'] == 'my_value'
 
 You also can set default headers for all session requests::
 
-    >>> session = aiohttp.ClientSession(
-    ...     headers={"Authorization": "Basic bG9naW46cGFzcw=="})
-    >>> r = yield from s.get("http://httpbin.org/headers")
-    >>> json = yield from r.json()
-    >>> json['headers']['Authorization']
-    'Basic bG9naW46cGFzcw=='
+    async with aiohttp.ClientSession(
+        headers={"Authorization": "Basic bG9naW46cGFzcw=="}) as session:
+        async with session.get("http://httpbin.org/headers") as r:
+            json_body = await r.json()
+            assert json_body['headers']['Authorization'] == \
+                'Basic bG9naW46cGFzcw=='
 
-By default aiohttp does not use connection pooling. In other words
-multiple calls to :func:`~aiohttp.client.request` will start a new
-connection to host each.  :class:`~aiohttp.client.ClientSession`
-object will do connection pooling for you.
+:class:`~aiohttp.ClientSession` supports keep-alive requests
+and connection pooling out-of-the-box.
 
 
 Connectors
 ----------
 
-To tweek or change *transport* layer of requests you can pass a custom
-**Connector** to ``aiohttp.request``. For example::
+To tweak or change *transport* layer of requests you can pass a custom
+*connector* to :class:`~aiohttp.ClientSession` and family. For example::
 
-    >>> conn = aiohttp.TCPConnector()
-    >>> r = yield from aiohttp.request(
-    ...     'get', 'http://python.org', connector=conn)
+    conn = aiohttp.TCPConnector()
+    session = aiohttp.ClientSession(connector=aiohttp.TCPConnector())
+
+
+.. seealso:: :ref:`aiohttp-client-reference-connectors` section for
+             more information about different connector types and
+             configuration options.
 
 
 Limiting connection pool size
@@ -379,105 +407,99 @@ Limiting connection pool size
 
 To limit amount of simultaneously opened connection to the same
 endpoint (``(host, port, is_ssl)`` triple) you can pass *limit*
-parameter to **connector**::
+parameter to *connector*::
 
-    >>> conn = aiohttp.TCPConnector(limit=30)
+    conn = aiohttp.TCPConnector(limit=30)
 
 The example limits amount of parallel connections to `30`.
 
 
-SSL control for tcp sockets
+SSL control for TCP sockets
 ---------------------------
 
-:class:`aiohttp.connector.TCPConnector` constructor accepts mutually
+:class:`~aiohttp.TCPConnector` constructor accepts mutually
 exclusive *verify_ssl* and *ssl_context* params.
 
 By default it uses strict checks for HTTPS protocol. Certification
 checks can be relaxed by passing ``verify_ssl=False``::
 
-  >>> conn = aiohttp.TCPConnector(verify_ssl=False)
-  >>> session = aiohttp.ClientSession(connector=conn)
-  >>> r = yield from session.get('https://example.com')
+  conn = aiohttp.TCPConnector(verify_ssl=False)
+  session = aiohttp.ClientSession(connector=conn)
+  r = await session.get('https://example.com')
 
 
 If you need to setup custom ssl parameters (use own certification
 files for example) you can create a :class:`ssl.SSLContext` instance and
 pass it into the connector::
 
-  >>> sslcontext = ssl.create_default_context(cafile='/path/to/ca-bundle.crt')
-  >>> conn = aiohttp.TCPConnector(ssl_context=sslcontext)
-  >>> session = aiohttp.ClientSession(connector=conn)
-  >>> r = yield from session.get('https://example.com')
+  sslcontext = ssl.create_default_context(cafile='/path/to/ca-bundle.crt')
+  conn = aiohttp.TCPConnector(ssl_context=sslcontext)
+  session = aiohttp.ClientSession(connector=conn)
+  r = await session.get('https://example.com')
 
-You may also verify certificates via md5, sha1, or sha256 fingerprint::
+You may also verify certificates via MD5, SHA1, or SHA256 fingerprint::
 
-  >>> # Attempt to connect to https://www.python.org
-  >>> # with a pin to a bogus certificate:
-  >>> bad_md5 = b'\xa2\x06G\xad\xaa\xf5\xd8\\J\x99^by;\x06='
-  >>> conn = aiohttp.TCPConnector(fingerprint=bad_md5)
-  >>> session = aiohttp.ClientSession(connector=conn)
-  >>> exc = None
-  >>> try:
-  ...     r = yield from session.get('https://www.python.org')
-  ... except FingerprintMismatch as e:
-  ...     exc = e
-  >>> exc is not None
-  True
-  >>> exc.expected == bad_md5
-  True
-  >>> exc.got  # www.python.org cert's actual md5
-  b'\xca;I\x9cuv\x8es\x138N$?\x15\xca\xcb'
+  # Attempt to connect to https://www.python.org
+  # with a pin to a bogus certificate:
+  bad_md5 = b'\xa2\x06G\xad\xaa\xf5\xd8\\J\x99^by;\x06='
+  conn = aiohttp.TCPConnector(fingerprint=bad_md5)
+  session = aiohttp.ClientSession(connector=conn)
+  exc = None
+  try:
+      r = yield from session.get('https://www.python.org')
+  except FingerprintMismatch as e:
+      exc = e
+  assert exc is not None
+  assert exc.expected == bad_md5
+
+  # www.python.org cert's actual md5
+  assert exc.got == b'\xca;I\x9cuv\x8es\x138N$?\x15\xca\xcb'
 
 Note that this is the fingerprint of the DER-encoded certificate.
 If you have the certificate in PEM format, you can convert it to
 DER with e.g. ``openssl x509 -in crt.pem -inform PEM -outform DER > crt.der``.
 
-Tip: to convert from a hexadecimal digest to a binary bytestring, you can use
+Tip: to convert from a hexadecimal digest to a binary byte-string, you can use
 :attr:`binascii.unhexlify`::
 
-  >>> md5_hex = 'ca3b499c75768e7313384e243f15cacb'
-  >>> from binascii import unhexlify
-  >>> unhexlify(md5_hex)
-  b'\xca;I\x9cuv\x8es\x138N$?\x15\xca\xcb'
+  md5_hex = 'ca3b499c75768e7313384e243f15cacb'
+  from binascii import unhexlify
+  assert unhexlify(md5_hex) == b'\xca;I\x9cuv\x8es\x138N$?\x15\xca\xcb'
 
 Unix domain sockets
 -------------------
 
-If your http server uses unix domain sockets you can use
-:class:`aiohttp.connector.UnixConnector`::
+If your HTTP server uses UNIX domain sockets you can use
+:class:`~aiohttp.UnixConnector`::
 
-  >>> conn = aiohttp.UnixConnector(path='/path/to/socket')
-  >>> r = yield from aiohttp.request(
-  ...     'get', 'http://python.org', connector=conn)
+  conn = aiohttp.UnixConnector(path='/path/to/socket')
+  session = aiohttp.ClientSession(connector=conn)
 
 
 Proxy support
 -------------
 
 aiohttp supports proxy. You have to use
-:class:`aiohttp.connector.ProxyConnector`::
+:class:`~aiohttp.ProxyConnector`::
 
-   >>> conn = aiohttp.ProxyConnector(proxy="http://some.proxy.com")
-   >>> r = yield from aiohttp.request('get',
-   ...                                'http://python.org',
-   ...                                connector=conn)
+   conn = aiohttp.ProxyConnector(proxy="http://some.proxy.com")
+   session = aiohttp.ClientSession(connector=conn)
+   async with session.get('http://python.org') as resp:
+       print(resp.status)
 
-:class:`~aiohttp.connector.ProxyConnector` also supports proxy authorization::
+:class:`~aiohttp.ProxyConnector` also supports proxy authorization::
 
-   >>> conn = aiohttp.ProxyConnector(
-   ...   proxy="http://some.proxy.com",
-   ...   proxy_auth=aiohttp.BasicAuth('user', 'pass'))
-   >>> r = yield from aiohttp.request('get',
-   ...                                'http://python.org',
-   ...                                connector=conn)
+   conn = aiohttp.ProxyConnector(
+       proxy="http://some.proxy.com",
+       proxy_auth=aiohttp.BasicAuth('user', 'pass'))
+   session = aiohttp.ClientSession(connector=conn)
+   async with session.get('http://python.org') as r:
+       assert r.status == 200
 
-Auth credentials can be passed in proxy URL::
+Authentication credentials can be passed in proxy URL::
 
-   >>> conn = aiohttp.ProxyConnector(
-   ...     proxy="http://user:pass@some.proxy.com")
-   >>> r = yield from aiohttp.request('get',
-   ...                                'http://python.org',
-   ...                                 connector=conn)
+   conn = aiohttp.ProxyConnector(
+       proxy="http://user:pass@some.proxy.com")
 
 
 Response Status Codes
@@ -485,17 +507,17 @@ Response Status Codes
 
 We can check the response status code::
 
-   >>> r = aiohttp.request('get', 'http://httpbin.org/get')
-   >>> r.status
-   200
+   async with session.get('http://httpbin.org/get') as resp:
+       assert resp.status == 200
 
 
 Response Headers
 ----------------
 
-We can view the server's response headers using a Python dictionary::
+We can view the server's response :attr:`ClientResponse.headers` using
+a :class:`CIMultiDictProxy`::
 
-    >>> r.headers
+    >>> resp.headers
     {'ACCESS-CONTROL-ALLOW-ORIGIN': '*',
      'CONTENT-TYPE': 'application/json',
      'DATE': 'Tue, 15 Jul 2014 16:49:51 GMT',
@@ -503,29 +525,42 @@ We can view the server's response headers using a Python dictionary::
      'CONTENT-LENGTH': '331',
      'CONNECTION': 'keep-alive'}
 
-The dictionary is special, though: it's made just for HTTP headers. According to
-`RFC 7230 <http://tools.ietf.org/html/rfc7230#section-3.2>`_, HTTP Header names
-are case-insensitive.
+The dictionary is special, though: it's made just for HTTP
+headers. According to `RFC 7230
+<http://tools.ietf.org/html/rfc7230#section-3.2>`_, HTTP Header names
+are case-insensitive. It also supports multiple values for the same
+key as HTTP protocol does.
 
 So, we can access the headers using any capitalization we want::
 
-    >>> r.headers['Content-Type']
+    >>> resp.headers['Content-Type']
     'application/json'
 
-    >>> r.headers.get('content-type')
+    >>> resp.headers.get('content-type')
     'application/json'
 
+All headers converted from binary data using UTF-8 with
+``surrogateescape`` option. That works fine on most cases but
+sometimes unconverted data is needed if a server uses nonstandard
+encoding. While these headers are malformed from :rfc:`7230`
+perspective they are may be retrieved by using
+:attr:`ClientResponse.raw_headers` property::
+
+    >>> resp.raw_headers
+    ((b'SERVER', b'nginx'),
+     (b'DATE', b'Sat, 09 Jan 2016 20:28:40 GMT'),
+     (b'CONTENT-TYPE', b'text/html; charset=utf-8'),
+     (b'CONTENT-LENGTH', b'12150'),
+     (b'CONNECTION', b'keep-alive'))
 
 Response Cookies
 ----------------
 
 If a response contains some Cookies, you can quickly access them::
 
-    >>> url = 'http://example.com/some/cookie/setting/url'
-    >>> r = yield from aiohttp.request('get', url)
-
-    >>> r.cookies['example_cookie_name']
-    'example_cookie_value'
+    url = 'http://example.com/some/cookie/setting/url'
+    async with session.get(url) as resp:
+        print(resp.cookies['example_cookie_name'])
 
 .. note::
 
@@ -535,23 +570,70 @@ If a response contains some Cookies, you can quickly access them::
    <aiohttp-client-session>` object.
 
 
+Response History
+----------------
+
+If a request was redirected, it is possible to view previous responses using
+the :attr:`~ClientResponse.history` attribute::
+
+    >>> resp = await session.get('http://example.com/some/redirect/')
+    >>> resp
+    <ClientResponse(http://example.com/some/other/url/) [200]>
+    >>> resp.history
+    (<ClientResponse(http://example.com/some/redirect/) [301]>,)
+
+If no redirects occurred or ``allow_redirects`` is set to ``False``,
+history will be an empty sequence.
+
+
+.. _aiohttp-client-websockets:
+
+WebSockets
+----------
+
+.. versionadded:: 0.15
+
+
+:mod:`aiohttp` works with client websockets out-of-the-box.
+
+You have to use the :meth:`aiohttp.ClientSession.ws_connect` coroutine
+for client websocket connection. It accepts a *url* as a first
+parameter and returns :class:`ClientWebSocketResponse`, with that
+object you can communicate with websocket server using response's
+methods::
+
+   session = aiohttp.ClientSession()
+   async with session.ws_connect('http://example.org/websocket') as ws:
+
+       async for msg in ws:
+           if msg.tp == aiohttp.MsgType.text:
+               if msg.data == 'close cmd':
+                   await ws.close()
+                   break
+               else:
+                   ws.send_str(msg.data + '/answer')
+           elif msg.tp == aiohttp.MsgType.closed:
+               break
+           elif msg.tp == aiohttp.MsgType.error:
+               break
+
+
+You **must** use the only websocket task for both reading (e.g ``await
+ws.receive()`` or ``async for msg in ws:``) and writing but may have
+multiple writer tasks which can only send data asynchronously (by
+``ws.send_str('data')`` for example).
+
+
 Timeouts
 --------
 
-You should use :func:`asyncio.wait_for()` coroutine if you want to limit
-time to wait for a response from a server::
+The example wraps a client call in :class:`Timeout` context
+manager, adding timeout for both connecting and response body
+reading procedures::
 
-    >>> yield from asyncio.wait_for(
-    ...     aiohttp.request('get', 'http://github.com'),
-    ...     0.001)
-    Traceback (most recent call last)\:
-      File "<stdin>", line 1, in <module>
-    asyncio.TimeoutError()
+    with aiohttp.Timeout(0.001):
+        async with aiohttp.get('https://github.com') as r:
+            await r.text()
 
 
-.. warning::
-
-    *timeout* is not a time limit on the entire response download;
-    rather, an exception is raised if the server has not issued a
-    response for *timeout* seconds (more precisely, if no bytes have been
-    received on the underlying socket for *timeout* seconds).
+.. disqus::

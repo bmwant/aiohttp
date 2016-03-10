@@ -69,9 +69,29 @@ class Stream(object):
     def read(self, size=None):
         return self.content.read(size)
 
+    def at_eof(self):
+        return self.content.tell() == len(self.content.getbuffer())
+
     @asyncio.coroutine
     def readline(self):
         return self.content.readline()
+
+    def unread_data(self, data):
+        self.content = io.BytesIO(data + self.content.read())
+
+
+class StreamWithShortenRead(Stream):
+
+    def __init__(self, content):
+        self._first = True
+        super().__init__(content)
+
+    @asyncio.coroutine
+    def read(self, size=None):
+        if size is not None and self._first:
+            self._first = False
+            size = size // 2
+        return (yield from super().read(size))
 
 
 class MultipartResponseWrapperTestCase(TestCase):
@@ -116,14 +136,14 @@ class PartReaderTestCase(TestCase):
         obj = aiohttp.multipart.BodyPartReader(
             self.boundary, {}, Stream(b'Hello, world!\r\n--:'))
         result = yield from obj.next()
-        self.assertEqual(b'Hello, world!\r\n', result)
+        self.assertEqual(b'Hello, world!', result)
         self.assertTrue(obj.at_eof())
 
     def test_next_next(self):
         obj = aiohttp.multipart.BodyPartReader(
             self.boundary, {}, Stream(b'Hello, world!\r\n--:'))
         result = yield from obj.next()
-        self.assertEqual(b'Hello, world!\r\n', result)
+        self.assertEqual(b'Hello, world!', result)
         self.assertTrue(obj.at_eof())
         result = yield from obj.next()
         self.assertIsNone(result)
@@ -132,7 +152,7 @@ class PartReaderTestCase(TestCase):
         obj = aiohttp.multipart.BodyPartReader(
             self.boundary, {}, Stream(b'Hello, world!\r\n--:'))
         result = yield from obj.read()
-        self.assertEqual(b'Hello, world!\r\n', result)
+        self.assertEqual(b'Hello, world!', result)
         self.assertTrue(obj.at_eof())
 
     def test_read_chunk_at_eof(self):
@@ -142,26 +162,118 @@ class PartReaderTestCase(TestCase):
         result = yield from obj.read_chunk()
         self.assertEqual(b'', result)
 
-    def test_read_chunk_requires_content_length(self):
+    def test_read_chunk_without_content_length(self):
         obj = aiohttp.multipart.BodyPartReader(
             self.boundary, {}, Stream(b'Hello, world!\r\n--:'))
+        c1 = yield from obj.read_chunk(8)
+        c2 = yield from obj.read_chunk(8)
+        c3 = yield from obj.read_chunk(8)
+        self.assertEqual(c1 + c2, b'Hello, world!')
+        self.assertEqual(c3, b'')
+
+    def test_read_incomplete_chunk(self):
+        stream = Stream(b'')
+
+        def prepare(data):
+            f = asyncio.Future(loop=self.loop)
+            f.set_result(data)
+            return f
+
+        with mock.patch.object(stream, 'read', side_effect=[
+            prepare(b'Hello, '),
+            prepare(b'World'),
+            prepare(b'!\r\n--:'),
+            prepare(b'')
+        ]):
+            obj = aiohttp.multipart.BodyPartReader(
+                self.boundary, {}, stream)
+            c1 = yield from obj.read_chunk(8)
+            self.assertEqual(c1, b'Hello, ')
+            c2 = yield from obj.read_chunk(8)
+            self.assertEqual(c2, b'World')
+            c3 = yield from obj.read_chunk(8)
+            self.assertEqual(c3, b'!')
+
+    def test_read_all_at_once(self):
+        stream = Stream(b'Hello, World!\r\n--:--\r\n')
+        obj = aiohttp.multipart.BodyPartReader(self.boundary, {}, stream)
+        result = yield from obj.read_chunk()
+        self.assertEqual(b'Hello, World!', result)
+        result = yield from obj.read_chunk()
+        self.assertEqual(b'', result)
+        self.assertTrue(obj.at_eof())
+
+    def test_read_incomplete_body_chunked(self):
+        stream = Stream(b'Hello, World!\r\n-')
+        obj = aiohttp.multipart.BodyPartReader(self.boundary, {}, stream)
+        result = b''
         with self.assertRaises(AssertionError):
-            yield from obj.read_chunk()
+            for _ in range(4):
+                result += yield from obj.read_chunk(7)
+        self.assertEqual(b'Hello, World!\r\n-', result)
+
+    def test_read_boundary_with_incomplete_chunk(self):
+        stream = Stream(b'')
+
+        def prepare(data):
+            f = asyncio.Future(loop=self.loop)
+            f.set_result(data)
+            return f
+
+        with mock.patch.object(stream, 'read', side_effect=[
+            prepare(b'Hello, World'),
+            prepare(b'!\r\n'),
+            prepare(b'--:'),
+            prepare(b'')
+        ]):
+            obj = aiohttp.multipart.BodyPartReader(
+                self.boundary, {}, stream)
+            c1 = yield from obj.read_chunk(12)
+            self.assertEqual(c1, b'Hello, World')
+            c2 = yield from obj.read_chunk(8)
+            self.assertEqual(c2, b'!')
+            c3 = yield from obj.read_chunk(8)
+            self.assertEqual(c3, b'')
+
+    def test_multi_read_chunk(self):
+        stream = Stream(b'Hello,\r\n--:\r\n\r\nworld!\r\n--:--')
+        obj = aiohttp.multipart.BodyPartReader(self.boundary, {}, stream)
+        result = yield from obj.read_chunk(8)
+        self.assertEqual(b'Hello,', result)
+        result = yield from obj.read_chunk(8)
+        self.assertEqual(b'', result)
+        self.assertTrue(obj.at_eof())
+
+    def test_read_chunk_properly_counts_read_bytes(self):
+        expected = b'.' * 10
+        size = len(expected)
+        obj = aiohttp.multipart.BodyPartReader(
+            self.boundary, {'CONTENT-LENGTH': size},
+            StreamWithShortenRead(expected + b'\r\n--:--'))
+        result = bytearray()
+        while True:
+            chunk = yield from obj.read_chunk()
+            if not chunk:
+                break
+            result.extend(chunk)
+        self.assertEqual(size, len(result))
+        self.assertEqual(b'.' * size, result)
+        self.assertTrue(obj.at_eof())
 
     def test_read_does_reads_boundary(self):
         stream = Stream(b'Hello, world!\r\n--:')
         obj = aiohttp.multipart.BodyPartReader(
             self.boundary, {}, stream)
         result = yield from obj.read()
-        self.assertEqual(b'Hello, world!\r\n', result)
+        self.assertEqual(b'Hello, world!', result)
         self.assertEqual(b'', (yield from stream.read()))
-        self.assertEqual([b'--:'], obj._unread)
+        self.assertEqual([b'--:'], list(obj._unread))
 
     def test_multiread(self):
         obj = aiohttp.multipart.BodyPartReader(
             self.boundary, {}, Stream(b'Hello,\r\n--:\r\n\r\nworld!\r\n--:--'))
         result = yield from obj.read()
-        self.assertEqual(b'Hello,\r\n', result)
+        self.assertEqual(b'Hello,', result)
         result = yield from obj.read()
         self.assertEqual(b'', result)
         self.assertTrue(obj.at_eof())
@@ -170,7 +282,7 @@ class PartReaderTestCase(TestCase):
         obj = aiohttp.multipart.BodyPartReader(
             self.boundary, {}, Stream(b'Hello\n,\r\nworld!\r\n--:--'))
         result = yield from obj.read()
-        self.assertEqual(b'Hello\n,\r\nworld!\r\n', result)
+        self.assertEqual(b'Hello\n,\r\nworld!', result)
         result = yield from obj.read()
         self.assertEqual(b'', result)
         self.assertTrue(obj.at_eof())
@@ -207,7 +319,7 @@ class PartReaderTestCase(TestCase):
             self.boundary, {CONTENT_ENCODING: 'identity'},
             Stream(thing + b'--:--'))
         result = yield from obj.read(decode=True)
-        self.assertEqual(thing, result)
+        self.assertEqual(thing[:-2], result)
 
     def test_read_with_content_encoding_unknown(self):
         obj = aiohttp.multipart.BodyPartReader(
@@ -230,7 +342,7 @@ class PartReaderTestCase(TestCase):
                    b' =D0=BC=D0=B8=D1=80!\r\n--:--'))
         result = yield from obj.read(decode=True)
         self.assertEqual(b'\xd0\x9f\xd1\x80\xd0\xb8\xd0\xb2\xd0\xb5\xd1\x82,'
-                         b' \xd0\xbc\xd0\xb8\xd1\x80!\r\n', result)
+                         b' \xd0\xbc\xd0\xb8\xd1\x80!', result)
 
     def test_read_with_content_transfer_encoding_unknown(self):
         obj = aiohttp.multipart.BodyPartReader(
@@ -243,21 +355,21 @@ class PartReaderTestCase(TestCase):
         obj = aiohttp.multipart.BodyPartReader(
             self.boundary, {}, Stream(b'Hello, world!\r\n--:--'))
         result = yield from obj.text()
-        self.assertEqual('Hello, world!\r\n', result)
+        self.assertEqual('Hello, world!', result)
 
     def test_read_text_encoding(self):
         obj = aiohttp.multipart.BodyPartReader(
             self.boundary, {},
             Stream('Привет, Мир!\r\n--:--'.encode('cp1251')))
         result = yield from obj.text(encoding='cp1251')
-        self.assertEqual('Привет, Мир!\r\n', result)
+        self.assertEqual('Привет, Мир!', result)
 
     def test_read_text_guess_encoding(self):
         obj = aiohttp.multipart.BodyPartReader(
             self.boundary, {CONTENT_TYPE: 'text/plain;charset=cp1251'},
             Stream('Привет, Мир!\r\n--:--'.encode('cp1251')))
         result = yield from obj.text()
-        self.assertEqual('Привет, Мир!\r\n', result)
+        self.assertEqual('Привет, Мир!', result)
 
     def test_read_text_compressed(self):
         obj = aiohttp.multipart.BodyPartReader(
@@ -352,7 +464,7 @@ class PartReaderTestCase(TestCase):
         yield from obj.release()
         self.assertTrue(obj.at_eof())
         self.assertEqual(b'\r\nworld!\r\n--:--', stream.content.read())
-        self.assertEqual([b'--:\r\n'], obj._unread)
+        self.assertEqual([b'--:\r\n'], list(obj._unread))
 
     def test_release_respects_content_length(self):
         obj = aiohttp.multipart.BodyPartReader(
@@ -369,7 +481,7 @@ class PartReaderTestCase(TestCase):
         yield from obj.release()
         yield from obj.release()
         self.assertEqual(b'\r\nworld!\r\n--:--', stream.content.read())
-        self.assertEqual([b'--:\r\n'], obj._unread)
+        self.assertEqual([b'--:\r\n'], list(obj._unread))
 
     def test_filename(self):
         part = aiohttp.multipart.BodyPartReader(
@@ -527,6 +639,50 @@ class MultipartReaderTestCase(TestCase):
         self.assertTrue(second.at_eof())
         self.assertIsNone(third)
 
+    def test_read_chunk_by_length_doesnt_breaks_reader(self):
+        reader = aiohttp.multipart.MultipartReader(
+            {CONTENT_TYPE: 'multipart/related;boundary=":"'},
+            Stream(b'--:\r\n'
+                   b'Content-Length: 4\r\n\r\n'
+                   b'test'
+                   b'\r\n--:\r\n'
+                   b'Content-Length: 6\r\n\r\n'
+                   b'passed'
+                   b'\r\n--:--'))
+        body_parts = []
+        while True:
+            read_part = b''
+            part = yield from reader.next()
+            if part is None:
+                break
+            while not part.at_eof():
+                read_part += yield from part.read_chunk(3)
+            body_parts.append(read_part)
+        self.assertListEqual(body_parts, [b'test', b'passed'])
+
+    def test_read_chunk_from_stream_doesnt_breaks_reader(self):
+        reader = aiohttp.multipart.MultipartReader(
+            {CONTENT_TYPE: 'multipart/related;boundary=":"'},
+            Stream(b'--:\r\n'
+                   b'\r\n'
+                   b'chunk'
+                   b'\r\n--:\r\n'
+                   b'\r\n'
+                   b'two_chunks'
+                   b'\r\n--:--'))
+        body_parts = []
+        while True:
+            read_part = b''
+            part = yield from reader.next()
+            if part is None:
+                break
+            while not part.at_eof():
+                chunk = yield from part.read_chunk(5)
+                self.assertTrue(chunk)
+                read_part += chunk
+            body_parts.append(read_part)
+        self.assertListEqual(body_parts, [b'chunk', b'two_chunks'])
+
 
 class BodyPartWriterTestCase(unittest.TestCase):
 
@@ -586,7 +742,7 @@ class BodyPartWriterTestCase(unittest.TestCase):
     def test_set_content_disposition(self):
         self.part.set_content_disposition('attachment', foo='bar')
         self.assertEqual(
-            'attachment; foo=bar',
+            'attachment; foo="bar"',
             self.part.headers[CONTENT_DISPOSITION])
 
     def test_set_content_disposition_bad_type(self):

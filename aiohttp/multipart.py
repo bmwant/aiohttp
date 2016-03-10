@@ -10,7 +10,8 @@ import uuid
 import warnings
 import zlib
 from urllib.parse import quote, unquote, urlencode, parse_qsl
-from collections import Mapping, Sequence
+from collections import deque, Mapping, Sequence
+from pathlib import Path
 
 from .helpers import parse_mimetype
 from .multidict import CIMultiDict
@@ -165,6 +166,17 @@ class MultipartResponseWrapper(object):
         self.resp = resp
         self.stream = stream
 
+    @asyncio.coroutine
+    def __aiter__(self):
+        return self
+
+    @asyncio.coroutine
+    def __anext__(self):
+        part = yield from self.next()
+        if part is None:
+            raise StopAsyncIteration  # NOQA
+        return part
+
     def at_eof(self):
         """Returns ``True`` when all response data had been read.
 
@@ -200,7 +212,20 @@ class BodyPartReader(object):
         length = self.headers.get(CONTENT_LENGTH, None)
         self._length = int(length) if length is not None else None
         self._read_bytes = 0
-        self._unread = []
+        self._unread = deque()
+        self._prev_chunk = None
+        self._content_eof = 0
+
+    @asyncio.coroutine
+    def __aiter__(self):
+        return self
+
+    @asyncio.coroutine
+    def __anext__(self):
+        part = yield from self.next()
+        if part is None:
+            raise StopAsyncIteration  # NOQA
+        return part
 
     @asyncio.coroutine
     def next(self):
@@ -228,8 +253,6 @@ class BodyPartReader(object):
         else:
             while not self._at_eof:
                 data.extend((yield from self.read_chunk(self.chunk_size)))
-            assert b'\r\n' == (yield from self._content.readline()), \
-                'reader did not read all the data or it is malformed'
         if decode:
             return self.decode(data)
         return data
@@ -237,7 +260,6 @@ class BodyPartReader(object):
     @asyncio.coroutine
     def read_chunk(self, size=chunk_size):
         """Reads body part content chunk of the specified size.
-        The body part must has `Content-Length` header with proper value.
 
         :param int size: chunk size
 
@@ -245,14 +267,73 @@ class BodyPartReader(object):
         """
         if self._at_eof:
             return b''
+        if self._length:
+            chunk = yield from self._read_chunk_from_length(size)
+        else:
+            chunk = yield from self._read_chunk_from_stream(size)
+
+        self._read_bytes += len(chunk)
+        if self._read_bytes == self._length:
+            self._at_eof = True
+        if self._at_eof:
+            assert b'\r\n' == (yield from self._content.readline()), \
+                'reader did not read all the data or it is malformed'
+        return chunk
+
+    @asyncio.coroutine
+    def _read_chunk_from_length(self, size):
+        """Reads body part content chunk of the specified size.
+        The body part must has `Content-Length` header with proper value.
+
+        :param int size: chunk size
+
+        :rtype: bytearray
+        """
         assert self._length is not None, \
             'Content-Length required for chunked read'
         chunk_size = min(size, self._length - self._read_bytes)
         chunk = yield from self._content.read(chunk_size)
-        self._read_bytes += chunk_size
-        if self._read_bytes == self._length:
-            self._at_eof = True
         return chunk
+
+    @asyncio.coroutine
+    def _read_chunk_from_stream(self, size):
+        """Reads content chunk of body part with unknown length.
+        The `Content-Length` header for body part is not necessary.
+
+        :param int size: chunk size
+
+        :rtype: bytearray
+        """
+        assert size >= len(self._boundary) + 2, \
+            'Chunk size must be greater or equal than boundary length + 2'
+        first_chunk = self._prev_chunk is None
+        if first_chunk:
+            self._prev_chunk = yield from self._content.read(size)
+
+        chunk = yield from self._content.read(size)
+        self._content_eof += int(self._content.at_eof())
+        assert self._content_eof < 3, "Reading after EOF"
+        window = self._prev_chunk + chunk
+        sub = b'\r\n' + self._boundary
+        if first_chunk:
+            idx = window.find(sub)
+        else:
+            idx = window.find(sub, max(0, len(self._prev_chunk) - len(sub)))
+        if idx >= 0:
+            # pushing boundary back to content
+            self._content.unread_data(window[idx:])
+            if size > idx:
+                self._prev_chunk = self._prev_chunk[:idx]
+            chunk = window[len(self._prev_chunk):idx]
+            if not chunk:
+                self._at_eof = True
+        if 0 < len(chunk) < len(sub) and not self._content_eof:
+            self._prev_chunk += chunk
+            self._at_eof = False
+            return b''
+        result = self._prev_chunk
+        self._prev_chunk = chunk
+        return result
 
     @asyncio.coroutine
     def readline(self):
@@ -262,7 +343,12 @@ class BodyPartReader(object):
         """
         if self._at_eof:
             return b''
-        line = yield from self._content.readline()
+
+        if self._unread:
+            line = self._unread.popleft()
+        else:
+            line = yield from self._content.readline()
+
         if line.startswith(self._boundary):
             # the very last boundary may not come with \r\n,
             # so set single rules for everyone
@@ -274,6 +360,12 @@ class BodyPartReader(object):
                 self._at_eof = True
                 self._unread.append(line)
                 return b''
+        else:
+            next_line = yield from self._content.readline()
+            if next_line.startswith(self._boundary):
+                line = line[:-2]  # strip CRLF but only once
+            self._unread.append(next_line)
+
         return line
 
     @asyncio.coroutine
@@ -290,7 +382,6 @@ class BodyPartReader(object):
         else:
             while not self._at_eof:
                 yield from self.read_chunk(self.chunk_size)
-            assert b'\r\n' == (yield from self._content.readline())
 
     @asyncio.coroutine
     def text(self, *, encoding=None):
@@ -420,6 +511,17 @@ class MultipartReader(object):
         self._at_eof = False
         self._unread = []
 
+    @asyncio.coroutine
+    def __aiter__(self):
+        return self
+
+    @asyncio.coroutine
+    def __anext__(self):
+        part = yield from self.next()
+        if part is None:
+            raise StopAsyncIteration  # NOQA
+        return part
+
     @classmethod
     def from_response(cls, response):
         """Constructs reader instance from HTTP response.
@@ -515,10 +617,10 @@ class MultipartReader(object):
 
     @asyncio.coroutine
     def _read_headers(self):
-        lines = ['']
+        lines = [b'']
         while True:
             chunk = yield from self._content.readline()
-            chunk = chunk.decode().strip()
+            chunk = chunk.strip()
             lines.append(chunk)
             if not chunk:
                 break
@@ -609,15 +711,15 @@ class BodyPartWriter(object):
         if isinstance(obj, io.IOBase):
             name = getattr(obj, 'name', None)
             if name is not None:
-                return os.path.basename(name)
+                return Path(name).name
 
     def serialize(self):
         """Yields byte chunks for body part."""
 
         has_encoding = (
-            CONTENT_ENCODING in self.headers
-            and self.headers[CONTENT_ENCODING] != 'identity'
-            or CONTENT_TRANSFER_ENCODING in self.headers
+            CONTENT_ENCODING in self.headers and
+            self.headers[CONTENT_ENCODING] != 'identity' or
+            CONTENT_TRANSFER_ENCODING in self.headers
         )
         if has_encoding:
             # since we're following streaming approach which doesn't assumes
@@ -692,9 +794,10 @@ class BodyPartWriter(object):
         if encoding == 'identity':
             yield from stream
         elif encoding in ('deflate', 'gzip'):
-            zlib_mode = (16 + zlib.MAX_WBITS
-                         if encoding == 'gzip' else
-                         -zlib.MAX_WBITS)
+            if encoding == 'gzip':
+                zlib_mode = 16 + zlib.MAX_WBITS
+            else:
+                zlib_mode = -zlib.MAX_WBITS
             zcomp = zlib.compressobj(wbits=zlib_mode)
             for chunk in stream:
                 yield zcomp.compress(chunk)
@@ -745,11 +848,9 @@ class BodyPartWriter(object):
                     raise ValueError('bad content disposition parameter'
                                      ' {!r}={!r}'.format(key, val))
                 qval = quote(val, '')
+                lparams.append((key, '"%s"' % qval))
                 if key == 'filename':
-                    lparams.append((key, '"%s"' % qval))
                     lparams.append(('filename*', "utf-8''" + qval))
-                else:
-                    lparams.append((key, "%s" % qval))
             sparams = '; '.join('='.join(pair) for pair in lparams)
             value = '; '.join((value, sparams))
         self.headers[CONTENT_DISPOSITION] = value

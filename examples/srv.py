@@ -14,8 +14,6 @@ import asyncio
 import aiohttp
 import aiohttp.server
 
-assert sys.version >= '3.3', 'Please use Python 3.3 or higher.'
-
 
 class HttpRequestHandler(aiohttp.server.ServerHttpProtocol):
 
@@ -100,7 +98,7 @@ class HttpRequestHandler(aiohttp.server.ServerHttpProtocol):
             self.keep_alive(True)
 
 
-ARGS = argparse.ArgumentParser(description="Run simple http server.")
+ARGS = argparse.ArgumentParser(description="Run simple HTTP server.")
 ARGS.add_argument(
     '--host', action="store", dest='host',
     default='127.0.0.1', help='Host name')

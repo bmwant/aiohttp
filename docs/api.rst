@@ -23,6 +23,7 @@ aiohttp.helpers module
 .. automodule:: aiohttp.helpers
     :members:
     :undoc-members:
+    :exclude-members: BasicAuth
     :show-inheritance:
 
 aiohttp.multipart module
@@ -41,10 +42,10 @@ aiohttp.parsers module
     :undoc-members:
     :show-inheritance:
 
-aiohttp.protocol module
------------------------
+aiohttp.signals module
+----------------------
 
-.. automodule:: aiohttp.protocol
+.. automodule:: aiohttp.signals
     :members:
     :undoc-members:
     :show-inheritance:
@@ -72,3 +73,5 @@ aiohttp.wsgi module
     :members:
     :undoc-members:
     :show-inheritance:
+
+.. disqus::
